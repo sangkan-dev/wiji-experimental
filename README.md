@@ -154,7 +154,7 @@ Lihat [CONTRIBUTING.md](CONTRIBUTING.md) untuk detail.
 ## Diskusi
 
 - 💬 [GitHub Discussions](https://github.com/sangkan-dev/wiji-experimental/discussions)
-- 🐦 Twitter/X: [@hasanh47](https://twitter.com/hasanh47)
+<!-- - 🐦 Twitter/X: [@hasanh47](https://twitter.com/hasanh47) -->
 - 📝 LinkedIn: [HasanH47](https://linkedin.com/in/hasanh47)
 
 ## Lisensi
