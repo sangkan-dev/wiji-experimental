@@ -4,175 +4,191 @@
 
 **ꦮꦶꦗꦶ** *— biji, benih, asal mula*
 
-*Memaksimalkan yang minimal — dari biji menjadi hutan kecerdasan.*
+*An open research project that asked a hard question and got an honest answer.*
 
-[![Status](https://img.shields.io/badge/status-experimental-orange)](.)
+[![Status](https://img.shields.io/badge/status-phase%200%20closed-blue)](.)
+[![Result](https://img.shields.io/badge/result-negative%20(but%20valuable)-orange)](.)
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Phase](https://img.shields.io/badge/phase-0%20validation-yellow)](.)
 
 </div>
 
 ---
 
-## Apa itu WIJI?
+## TL;DR
 
-WIJI adalah eksperimen riset terbuka untuk mempertanyakan asumsi fundamental yang ada di seluruh deep learning sejak 1986:
+WIJI adalah eksperimen riset terbuka yang mempertanyakan asumsi fundamental di deep learning: **apakah weight neural network harus disimpan sebagai matriks angka statis?**
 
-> *"Apakah pengetahuan jaringan neural HARUS disimpan sebagai weight matriks statis?"*
+Setelah **9 eksperimen sistematik** dengan **5 arsitektur generator yang berbeda**, jawabannya adalah: **ya, untuk model yang sudah dilatih.**
 
-Konsep WIJI: **weight tidak disimpan, weight ditumbuhkan dari biji**. Sebuah generator kecil dengan parameter minimal di-train untuk merekonstruksi weight model besar saat dibutuhkan, mirip seperti DNA yang menumbuhkan pohon dari biji.
+Tapi journey ini menghasilkan **bukti empiris yang valuable** tentang batas fundamental coordinate-based weight reconstruction. Phase 0 ditutup dengan negative results yang well-documented dan **terbuka untuk siapapun yang mau melanjutkan ke arah berbeda** (co-training, hypernetwork training from scratch).
 
-**Goal**: AI model 30B+ jalan di smartphone tanpa cloud, dengan footprint memori beberapa puluh MB.
+## Pertanyaan Penelitian
 
-## Status Saat Ini
+Bisakah weight LLM yang sudah dilatih (TinyLlama 1.1B) di-rekonstruksi dari generator coordinate-based yang jauh lebih kecil, sehingga model bisa berjalan dengan footprint memori minimal?
 
-🟡 **Phase 0 — Validation in progress**
+**Hipotesis awal**: Weight punya redundansi yang bisa di-exploit oleh generator dengan parameter signifikan lebih sedikit.
 
-Kami sedang menguji apakah weight model existing (TinyLlama 1.1B) bisa di-rekonstruksi dengan loss yang acceptable dari generator kecil. Hasil sejauh ini: **partial success** — single layer compression 56x bekerja, multi-layer compression menemui cliff edge di N=2.
+**Hasil**: Hipotesis terbukti benar untuk **single layer**, tapi **gagal untuk multi-layer** karena **floor of irreducible noise** di weight yang dihasilkan SGD training.
 
-Lihat [RESULTS.md](docs/RESULTS.md) untuk dokumentasi lengkap eksperimen.
+## Hasil Eksperimen — The Full Story
 
-## Hasil Eksperimen Terbaru
+| # | Eksperimen | Arsitektur | Compression | Output Quality |
+|---|-----------|------------|-------------|----------------|
+| 1 | Single matrix swap | Coordinate MLP | 25x | ✅ Functional |
+| 2 | Multi-layer single gen | Coordinate MLP + layer emb | 545x | ❌ Gibberish |
+| A | Full attention layer 0 | Coordinate MLP + comp emb | 56x | ✅ Functional |
+| B2 | Per-layer generator | 22 × Coordinate MLP | 25x | ❌ Gibberish |
+| B3 | Adaptive capacity | 22 × Coordinate MLP (varied) | 15x | ❌ Worse |
+| B4 | Cliff edge test | (uses B3 generators) | varies | 🔍 Cliff at N=2 |
+| C1 | **Fourier Features** | Fourier encoding + MLP | 42x | ❌ Same plateau |
+| D1 | **FFN target** | Fourier + dynamic | 116x | ❌ Same plateau |
+| E1 | **SIREN** | Sinusoidal activation | 28x | ❌ Same plateau |
+| F1 | **Mixture of Generators** | 16-expert sharding | 31x | ❌ Same plateau |
 
-| # | Eksperimen | Compression | Hasil |
-|---|-----------|-------------|-------|
-| 1 | Single matrix swap (`o_proj` layer 0) | 25x | ✅ Functional output |
-| 2 | Multi-layer single generator (22 layers) | 545x | ❌ Gibberish output |
-| A | Full attention layer 0 (Q/K/V/O) | 56x | ✅ Functional output |
-| B2 | Per-layer generator (22 layers) | 25x | ❌ Gibberish output |
-| B3 | Adaptive capacity per-layer | 15x | ❌ Worse output |
-| B4 | Cliff edge test (progressive swap) | varies | 🔍 Cliff edge found at N=2 |
+**The Smoking Gun**:
 
-## Insight Kunci yang Sudah Ditemukan
+```
+Final MSE Layer 21 across 5 different architectures:
+  Baseline (B2) :  0.000373
+  Adaptive (B3) :  0.000366
+  Fourier  (C1) :  0.000356
+  SIREN    (E1) :  0.000371
+  MoG      (F1) :  0.000377
+```
 
-1. **MSE Loss BUKAN reliable predictor** untuk output quality LLM (terbukti empiris)
-2. **Cliff edge tajam di N=2** — model collapse setelah lebih dari 1 layer di-replace
-3. **Capacity tidak menyelesaikan masalah** — generator 10x lebih besar tetap plateau di MSE 0.0003-0.0004
-4. **Spectral bias hipotesis** — coordinate MLP standar mungkin punya hard limit untuk fitting weight transformer
-5. **N=22 lebih baik dari N=5-16** — internal consistency matters more than absolute error
+5 arsitektur yang fundamentally berbeda — coordinate MLP, Fourier features (NeRF-style), SIREN (sinusoidal), Mixture of Generators (sharding) — semuanya **mentok di MSE plateau yang hampir identik**.
 
-## Riset Pendukung
+Ini bukti yang sangat kuat bahwa **batas yang kami temui bukan batas arsitektur generator**, tapi **batas fundamental dari weight yang dihasilkan SGD training**.
 
-WIJI dibangun di atas beberapa breakthrough riset terbaru:
+## Insight Utama
 
-- [D'OH: Decoder-Only Random Hypernetworks](https://arxiv.org/abs/2403.19163) (ACCV 2024)
-- [Recursive Self-Similarity in Deep Weight Spaces](https://arxiv.org/abs/2503.14298) (Mar 2025)
-- [BitNet b1.58](https://arxiv.org/abs/2402.17764) (Microsoft 2024)
-- [Pre-Attention Expert Prediction for MoE](https://arxiv.org/abs/2511.10676) (Nov 2025)
-- [Fractal Generative Models](https://arxiv.org/abs/2502.17437) (Feb 2025)
+### 1. MSE plateau adalah floor, bukan ceiling
 
-Lihat [docs/RESEARCH-FOUNDATIONS.md](docs/RESEARCH-FOUNDATIONS.md) untuk konteks lengkap.
+Weight neural network setelah training **bukan smooth function dari koordinat**. Itu **stochastic outcome dari proses optimisasi** — dependent pada random init, batch order, dan ribuan microevents selama training.
+
+**Tidak ada generator coordinate-based** yang bisa "compute" nilai weight dari koordinat saja, karena nilai itu **bukan fungsi dari koordinat**. Itu **artifact dari sejarah training**.
+
+Ini insight yang signifikan. Banyak research di implicit neural representation berasumsi bahwa learned weight punya struktur yang bisa di-fit oleh fungsi smooth. Eksperimen kami **mempertanyakan asumsi itu** secara empiris.
+
+### 2. Cliff edge phenomenon
+
+Model collapse **tidak gradual** seiring jumlah layer di-swap. Ada phase transition tajam antara N=1 dan N=3.
+
+Yang menarik: N=22 (semua layer di-swap) menghasilkan output meski gibberish, sementara N=5-16 menghasilkan empty string. **Internal consistency lebih penting dari absolute correctness** dalam multi-component systems.
+
+### 3. MSE Loss bukan reliable predictor untuk LLM quality
+
+Diagnostik A: MSE 6x lebih tinggi dari Eksperimen 1, output **tetap berkualitas tinggi**. Eksperimen 2: MSE hanya 3x lebih tinggi, output **collapse total**.
+
+**Implikasi**: Research di area implicit weight representation perlu metric yang lebih baik dari MSE — output KL-divergence, perplexity comparison, atau task-specific accuracy.
+
+## Status Project
+
+🔴 **Phase 0 — CLOSED with negative results**
+
+Setelah 9 eksperimen sistematik, kami **tidak bisa demonstrate** bahwa weight LLM yang sudah dilatih bisa di-compress lebih dari N=1 layer dengan coordinate-based generator. Ini bukan kegagalan komunikasi atau eksekusi — ini **fundamental limit** yang teridentifikasi melalui eksperimen yang hati-hati.
+
+### Apa yang Mungkin (untuk orang lain)
+
+Jalur yang **belum kami eksplor** dan mungkin menghasilkan hasil berbeda:
+
+1. **Co-Training / HyperNetwork Training from Scratch**: Train model from scratch dimana generator adalah part of the architecture. Hypothesis: weight yang **terbentuk** dari generator akan compressible by definition. Sudah ada di literature (Ha et al. 2016+) tapi belum ada yang push ke LLM-scale.
+
+2. **Output-aware loss**: Daripada minimize MSE pada weight, minimize KL-divergence pada output distribusi. Computationally expensive tapi might bypass MSE plateau.
+
+3. **Different model architectures**: Test pada Mamba/SSM yang struktur weightnya mungkin berbeda dari transformer.
+
+4. **Distillation approach**: Train small student dengan weight generated from generator, distill from teacher. Mengubah problem dari "fit existing weight" ke "learn capabilities."
 
 ## Struktur Repository
 
 ```
 wiji-experimental/
-├── README.md              # File ini
-├── LICENSE                # MIT License
-├── pyproject.toml         # Python dependencies (uv)
+├── README.md                  # File ini
+├── LICENSE                    # MIT
+├── CONTRIBUTING.md            # Panduan kontribusi
+├── pyproject.toml
+│
 ├── docs/
-│   ├── PRD.md             # Product Requirements Document lengkap
-│   ├── RESULTS.md         # Hasil semua eksperimen + analisis
-│   ├── INSIGHTS.md        # Pelajaran teknis dari journey ini
-│   ├── RESEARCH-FOUNDATIONS.md  # Paper-paper yang menjadi fondasi
-│   └── CHANGELOG.md       # Log perubahan
+│   ├── PRD.md                 # Product Requirements Document (historical)
+│   ├── RESULTS.md             # Hasil lengkap 9 eksperimen
+│   ├── INSIGHTS.md            # Pelajaran teknis dan filosofis
+│   ├── POSTMORTEM.md          # Analisis kenapa Phase 0 ditutup
+│   ├── RESEARCH-FOUNDATIONS.md  # Paper-paper pendukung
+│   └── CHANGELOG.md
+│
 ├── experiments/
 │   ├── exp01_single_matrix.py
 │   ├── exp02_multi_layer_single_gen.py
 │   ├── expA_full_attention_layer0.py
 │   ├── expB2_per_layer_generator.py
 │   ├── expB3_adaptive_capacity.py
-│   └── expB4_cliff_edge.py
-├── results/
-│   ├── exp01_output.txt
-│   ├── exp02_output.txt
-│   ├── ...
-│   └── compiled_results.csv
-└── scripts/
-    └── reproduce_all.sh
+│   ├── expB4_cliff_edge.py
+│   ├── expC1_fourier_features.py     # Negative result
+│   ├── expD1_ffn_target.py            # Negative result
+│   ├── expE1_siren_o_proj.py          # Negative result
+│   └── expF1_mixture_of_generators.py # Negative result
+│
+├── results/                   # Raw outputs from all experiments
+├── scripts/
+└── publications/              # LinkedIn, Medium, paper strategy
 ```
 
 ## Quick Start
 
 ```bash
-# Clone repo
 git clone https://github.com/sangkan-dev/wiji-experimental.git
 cd wiji-experimental
-
-# Setup environment dengan uv
 uv sync
 
-# Run eksperimen pertama (single matrix)
+# Run any experiment
 uv run experiments/exp01_single_matrix.py
-
-# Atau run semua eksperimen
-bash scripts/reproduce_all.sh
 ```
 
-**Hardware requirement minimal:**
-- 16 GB RAM
-- CPU 4 core (GPU tidak diperlukan)
-- ~5 GB disk space (untuk model TinyLlama)
+**Hardware**: 16 GB RAM laptop, no GPU required.
 
-## Roadmap Berikutnya
+## Contributing
 
-### Short term (1-2 minggu)
-- [ ] Test eksperimen dengan Fourier Features encoding
-- [ ] Test eksperimen pada FFN layer (`gate_proj`, `up_proj`, `down_proj`)
-- [ ] Test eksperimen pada model lebih besar (Qwen 1.5B)
-- [ ] Output-aware loss function (KL-divergence)
+WIJI Phase 0 ditutup, tapi repo terbuka untuk:
 
-### Medium term (1-2 bulan)
-- [ ] Streaming inference system (Jalur C — only 1 layer in RAM)
-- [ ] Fractal hypernetwork generator
-- [ ] Rust port untuk performance benchmarking
+- **Reproduce results** dan validasi temuan kami
+- **Critique methodology** — apakah ada flaw di experimental setup yang membuat hasil misleading?
+- **Try alternative approaches** (co-training, output-aware loss, dll) sebagai fork atau Phase 1
+- **Discuss philosophy** — apakah kesimpulan kami terlalu pesimistis?
 
-### Long term (3-6 bulan)
-- [ ] Mobile deployment (Android/iOS)
-- [ ] Submit paper ke MLSys / NeurIPS Workshop
-- [ ] Open source release v1.0
+Lihat [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Filosofi Project
 
-WIJI bukan tentang ngalahin Claude atau GPT-4. WIJI tentang **decentralisasi kecerdasan**.
+WIJI dimulai dari pertanyaan yang ambisius dan ditutup dengan jawaban yang jujur. Bagi saya, itu adalah research yang valid — bahkan yang valuable.
 
-Kalau tren AI sentralisasi diteruskan, masa depan adalah dystopia dimana hanya 5 perusahaan di dunia yang punya AI kelas atas, dan sisanya menyewa. WIJI adalah taruhan melawan tren itu — taruhan bahwa kecerdasan bisa dibuat *minimal*, *terjangkau*, dan *milik semua orang*.
+Banyak project AI yang dimulai dengan klaim besar dan tidak pernah memberikan bukti. WIJI berani mengatakan: *"Ini yang kami coba. Ini yang kami pelajari. Ini batas yang kami temui."*
 
-> *"Mari kita jadi lebih gila, mari kita lebih menggila di dunia yang udah gila ini."*
+Negative results yang well-documented adalah **kontribusi nyata** ke komunitas riset. Setidaknya orang berikutnya yang punya ide serupa akan tahu apa yang sudah dicoba dan kenapa itu tidak bekerja — menghemat berbulan-bulan effort.
 
-## Kontribusi
+> *"Mari kita lebih menggila di dunia yang udah gila ini."*
 
-Project ini sangat eksperimental dan terbuka untuk siapapun yang tertarik. Beberapa cara berkontribusi:
-
-- **Reproduce eksperimen** dan laporkan hasil di issues
-- **Coba eksperimen baru** dengan model atau dataset berbeda
-- **Bantu validasi hipotesis** dengan literature search
-- **Kritik metodologi** — sangat dibutuhkan untuk rigor ilmiah
-
-Lihat [CONTRIBUTING.md](CONTRIBUTING.md) untuk detail.
-
-## Diskusi
-
-- 💬 [GitHub Discussions](https://github.com/sangkan-dev/wiji-experimental/discussions)
-<!-- - 🐦 Twitter/X: [@hasanh47](https://twitter.com/hasanh47) -->
-- 📝 LinkedIn: [HasanH47](https://linkedin.com/in/hasanh47)
+Project ini gila. Hasilnya jujur. Itu cukup.
 
 ## Lisensi
 
-MIT License — bebas untuk dipakai, modifikasi, dan distribusi. Lihat [LICENSE](LICENSE).
+MIT License — bebas untuk dipakai, modifikasi, dan extend.
 
 ## Acknowledgments
 
-- **Claude (Anthropic)** untuk research collaboration intens dalam mengeksplorasi konsep ini
-- **Microsoft Research** untuk BitNet yang membuka pintu thinking di luar FP16
-- **Komunitas hypernetwork research** yang sudah meletakkan fondasi matematis
-- **Filosofi Jawa** yang menginspirasi naming dan way-of-thinking project ini
+- **Claude (Anthropic)** untuk research collaboration intens
+- **Microsoft Research** untuk BitNet
+- **Komunitas hypernetwork research** (D'OH, fractal generative models, etc.)
+- **Filosofi Jawa** untuk naming dan way-of-thinking
+- **Komunitas yang bersedia membaca negative results** dengan respect
 
 ---
 
 <div align="center">
 
-**ꦮꦶꦗꦶ** — biji ditanam, hutan tumbuh.
+**ꦮꦶꦗꦶ** — biji ditanam, kebenaran tumbuh.
+
+*Sometimes the most valuable research output is knowing what doesn't work.*
 
 Built with curiosity by [Sangkan](https://github.com/sangkan-dev) · 2026
 

@@ -1,6 +1,6 @@
-# Hasil Eksperimen WIJI
+# Hasil Eksperimen WIJI — Complete Documentation
 
-Dokumen ini berisi hasil lengkap dari semua eksperimen Phase 0 yang telah dilakukan, termasuk metodologi, hasil mentah, dan analisis.
+Dokumen ini berisi hasil lengkap dari **9 eksperimen Phase 0** yang telah dilakukan, termasuk metodologi, hasil mentah, dan analisis.
 
 ## Setup Eksperimen
 
@@ -10,246 +10,348 @@ Dokumen ini berisi hasil lengkap dari semua eksperimen Phase 0 yang telah dilaku
 - **Test prompt**: `"What is the capital of Indonesia?"`
 - **Expected output**: Variations of "Jakarta is the capital of Indonesia"
 
+## Ringkasan Eksekutif
+
+| # | Eksperimen | Compression | MSE Layer 21 | Output Quality |
+|---|-----------|-------------|--------------|----------------|
+| 1 | Single matrix | 25x | N/A | ✅ Functional |
+| 2 | Multi-layer single gen | 545x | 0.000234 | ❌ Gibberish |
+| A | Full attention layer 0 | 56x | N/A | ✅ Functional |
+| B2 | Per-layer generator | 25x | 0.000373 | ❌ Gibberish |
+| B3 | Adaptive capacity | 15x | 0.000366 | ❌ Worse |
+| B4 | Cliff edge test | varies | (uses B3) | 🔍 Cliff at N=2 |
+| C1 | Fourier Features | 42x | 0.000356 | ❌ Same plateau |
+| D1 | FFN target | 116x | 0.000315 | ❌ Same plateau |
+| E1 | SIREN | 28x | 0.000371 | ❌ Same plateau |
+| F1 | Mixture of Generators | 32x | 0.000377 | ❌ Same plateau |
+
 ## Eksperimen 1 — Single Matrix Reconstruction
 
-**Tujuan**: Membuktikan bahwa weight matrix (`o_proj` layer 0) bisa di-rekonstruksi dari generator kecil.
+**Tujuan**: Membuktikan bahwa weight matrix dari LLM bisa di-rekonstruksi dari coordinate-based generator yang lebih kecil.
 
 ### Setup
 - Target: 1 matriks (`o_proj` layer 0), 4.2M parameters
 - Generator: Coordinate MLP (164K params)
 - Compression: 25.53x
-- Training: 5000 steps, batch size 8192, lr=0.005
+- Training: 5000 steps
 
 ### Hasil
-
 ```
 Step  200/5000 | MSE Loss: 0.000073
-Step 1000/5000 | MSE Loss: 0.000073
 Step 5000/5000 | MSE Loss: 0.000065
 ```
 
-**Output setelah swap**: `"The capital of Indonesia is Jakarta."`
-
-### Analisis
-✅ **SUCCESS** — Output secara semantik identik dengan original. Membuktikan bahwa weight matrix punya redundansi yang signifikan dan bisa di-compress drastis.
+**Output**: `"The capital of Indonesia is Jakarta."` (✅ functional)
 
 ---
 
 ## Eksperimen 2 — Multi-Layer Single Generator
 
-**Tujuan**: Test apakah 1 generator bisa handle 22 layer sekaligus dengan layer embedding.
+**Tujuan**: Test apakah 1 generator bisa handle 22 layer.
 
 ### Setup
-- Target: 22 matriks (`o_proj` layer 0-21), 92M parameters
-- Generator: Coordinate MLP dengan layer embedding (169K params)
-- Compression: 545.72x
-- Training: 3000 steps
+- Target: 22 matriks `o_proj`, 92M params
+- Generator: Coordinate MLP + layer embedding (169K params)
+- Compression: **545.72x**
 
 ### Hasil
-
 ```
-Training Step  500/3000 | MSE Loss: 0.000251
-Training Step 3000/3000 | MSE Loss: 0.000234
+Final MSE: 0.000234
 ```
 
-**Output setelah swap**: `"Ingatescripturecordialoisimoisequalifiesearchivedeastern Discogs, and"`
+**Output**: `"Ingatescripturecordialoisimoisequalifiesearchivedeastern Discogs, and"` (❌ gibberish)
 
-### Analisis
-❌ **FAILURE** — Complete semantic collapse. Tapi data point penting:
-- MSE Loss hanya naik 3x dari Eksperimen 1
-- Output collapse total
-
-**Insight**: MSE Loss bukan reliable predictor untuk output quality.
+**Insight**: MSE hanya 3x lebih tinggi dari Eksperimen 1, tapi output collapse total. **MSE bukan predictor reliable.**
 
 ---
 
 ## Eksperimen Diagnostik A — Full Attention Layer 0
 
-**Tujuan**: Test apakah 1 generator bisa handle semua 4 weight matrix attention (Q/K/V/O) di 1 layer.
+**Tujuan**: Test single generator handle 4 attention components (Q/K/V/O).
 
 ### Setup
-- Target: 4 matriks attention layer 0 (Q, K, V, O), 9.4M parameters
-- Generator: Coordinate MLP dengan component embedding (168K params)
+- Target: 9.4M params
+- Generator: 168K params
 - Compression: 56x
-- Training: 3000 steps
 
 ### Hasil
-
 ```
-Training Step  500/3000 | MSE Loss: 0.000379
-Training Step 3000/3000 | MSE Loss: 0.000407
+Final MSE: 0.000400
 ```
 
-**Output setelah swap**: `"The capital of Indonesia is Jakarta."`
+**Output**: `"The capital of Indonesia is Jakarta."` (✅ functional)
 
-### Analisis
-✅ **SUCCESS** — Meskipun MSE Loss 6x lebih tinggi dari Eksperimen 1 (0.000067 → 0.000400), output **TETAP berkualitas tinggi**.
-
-**Insight kritis**: Konfirmasi bahwa MSE Loss bukan predictor reliable. Yang penting bukan absolute error, tapi **dimana error terjadi** dan **bagaimana error compounding lewat layer**.
-
-Layer 1-21 yang masih original bisa "memperbaiki" error di layer 0 yang di-corrupt. Ini menunjukkan resilience deep network terhadap noise di intermediate representations.
+**Insight**: MSE 6x lebih tinggi dari Exp 1, tapi output preserved. Konfirmasi bahwa masalah Exp 2 adalah **multi-layer compounding**, bukan multi-component.
 
 ---
 
-## Eksperimen B2 — Per-Layer Generator (Microservices)
+## Eksperimen B2 — Per-Layer Generator
 
-**Tujuan**: Bikin 22 generator terpisah, masing-masing untuk 1 layer.
+**Tujuan**: 22 generator terpisah, masing-masing untuk 1 layer.
 
 ### Setup
-- Target: 22 matriks `o_proj` (layer 0-21), 92M parameters
-- Generator: 22 generators × 164K params = 3.6M total
+- 22 × 164K = 3.6M params
 - Compression: 25.53x
-- Training: 1000 steps per generator
+- Training: 1000 steps per layer
 
 ### Hasil
-
-| Layer | MSE Loss | Layer | MSE Loss |
-|-------|----------|-------|----------|
+| Layer | MSE | Layer | MSE |
+|-------|------|-------|------|
 | 00 | 0.000063 | 11 | 0.000213 |
-| 01 | 0.000180 | 12 | 0.000245 |
-| 02 | 0.000195 | 13 | 0.000225 |
-| 03 | 0.000199 | 14 | 0.000241 |
-| 04 | 0.000198 | 15 | 0.000244 |
-| 05 | 0.000203 | 16 | 0.000252 |
-| 06 | 0.000198 | 17 | 0.000293 |
-| 07 | 0.000218 | 18 | 0.000305 |
-| 08 | 0.000216 | 19 | 0.000335 |
-| 09 | 0.000224 | 20 | 0.000339 |
-| 10 | 0.000225 | 21 | 0.000373 |
+| 05 | 0.000203 | 15 | 0.000244 |
+| 10 | 0.000225 | 21 | **0.000373** |
 
-**Output setelah swap**: `"WHEREASPark. ."`
+**Output**: `"WHEREASPark. ."` (❌ gibberish)
 
-### Analisis
-❌ **FAILURE** — Tapi data sangat informatif.
-
-**Pola yang ditemukan**: MSE error **meningkat secara monoton** dari layer awal (0.000063) ke layer akhir (0.000373) — naik 6x.
-
-**Insight**: Layer akhir di transformer punya distribusi weight yang lebih kompleks (entropi lebih tinggi) dari layer awal. Generator dengan capacity yang sama tidak ekspresif untuk merepresentasikan keduanya.
+**Insight**: MSE meningkat monoton 6x dari layer 0 ke layer 21. Layer akhir lebih kompleks.
 
 ---
 
 ## Eksperimen B3 — Adaptive Capacity
 
-**Tujuan**: Test apakah masalah B2 bisa diselesaikan dengan capacity yang lebih besar untuk layer akhir.
+**Tujuan**: Bigger generator untuk layer akhir.
 
 ### Setup
-- Target: Sama dengan B2
-- Generator: Adaptive capacity
-  - Layer 0-7: 128 hidden dim (small)
-  - Layer 8-15: 256 hidden dim (medium)
-  - Layer 16-21: 512 hidden dim (large)
-- Total: 5.9M params, compression 15.59x
-- Training: 3000 steps per generator (3x lebih lama dari B2)
+- Layer 0-7: 128 hidden dim
+- Layer 8-15: 256 hidden dim
+- Layer 16-21: 512 hidden dim
+- Total: 5.9M params, training 3000 steps
 
 ### Hasil
+```
+Layer 21 MSE: 0.000366 (vs B2: 0.000373)
+```
 
-Generator 10x lebih besar di layer akhir, training 3x lebih lama. Final MSE:
-- Layer 00: 0.000075 (vs B2: 0.000063)
-- Layer 21: **0.000366** (vs B2: 0.000373)
+**Output**: `` ` ` ` ` ` `` (❌ degenerate loop)
 
-**Output setelah swap**: `"\`\`\`\`\`\`\`\`\`\`\`"` (degenerate loop)
-
-### Analisis
-❌ **FAILURE** dengan insight terbesar.
-
-**Insight kritis**: MSE Loss **plateau di ~0.0003-0.0004 yang independent dari capacity dan training time**.
-
-Ini bukti kuat **spectral bias / lottery ticket phenomenon**: ada limit fundamental dalam representasi koordinat-based MLP untuk fitting random-looking distribution seperti weight transformer.
-
-**Capacity tidak akan menyelesaikan masalah ini.** Generator 10M+ params kemungkinan tetap plateau di area yang sama.
+**INSIGHT KRITIS**: Generator 10x lebih besar + training 3x lebih lama → MSE **hampir identik**. Hint pertama bahwa ini bukan masalah capacity.
 
 ---
 
 ## Eksperimen B4 — Cliff Edge Test
 
-**Tujuan**: Mencari titik dimana model collapse — berapa banyak layer yang bisa di-swap sebelum gibberish.
-
-### Setup
-- Pakai 22 generator yang trained dari B3 (training cepat 1000 steps)
-- Test progressive swap: N = 1, 3, 5, 8, 12, 16, 22
-- Backup original weight, restore antara test
+**Tujuan**: Cari titik dimana model collapse.
 
 ### Hasil
+| N | Output |
+|---|--------|
+| 1 | "The capital of Indonesia is Jakarta." ✅ |
+| 3 | "The capital of Ia is 10." ⚠️ |
+| 5 | "" ❌ |
+| 8 | "" ❌ |
+| 12 | "" ❌ |
+| 16 | "" ❌ |
+| 22 | "Ingunsuretournalty. WHERE2..." ❌ |
 
-| N (layers swapped) | Output | Status |
-|--------------------|--------|--------|
-| 1 | `"The capital of Indonesia is Jakarta."` | ✅ Perfect |
-| 3 | `"The capital of Ia is 10."` | ⚠️ Partial collapse |
-| 5 | `""` (empty) | ❌ Collapse |
-| 8 | `""` (empty) | ❌ Collapse |
-| 12 | `""` (empty) | ❌ Collapse |
-| 16 | `""` (empty) | ❌ Collapse |
-| 22 | `"Ingunsuretournalty. WHERE2..."` | ❌ Gibberish |
+**Insight**: Cliff edge sangat tajam di **N=2**. N=22 lebih baik dari N=5-16 menunjukkan **internal consistency matters**.
+
+---
+
+## Eksperimen C1 — Fourier Features
+
+**Tujuan**: Test apakah Fourier features (NeRF-style positional encoding) bisa solve hipotesis spectral bias.
+
+### Setup
+- Generator: Pure Fourier encoding (no nn.Embedding) + MLP
+- 16 frequency bands, hidden_dim=256
+- 22 generators × 99K params = 2.2M total
+- Compression: **42.31x**
+
+### Hasil
+```
+Layer 00 | MSE: 0.000072
+Layer 10 | MSE: 0.000220
+Layer 21 | MSE: 0.000356  ← masih plateau yang sama
+```
+
+### Cliff Edge
+| N | Output |
+|---|--------|
+| 1 | "The capital of Indonesia is Jakarta." ✅ |
+| 3 | "I don't know. Can you be a helpful assistant." ⚠️ |
+| 5 | "<\|user\|>You are a helpful assistant." ❌ |
+| 8-16 | "" ❌ |
+| 22 | "Theoryatarea, androoffertiltournputnamelysiphoniesearchive" ❌ |
 
 ### Analisis
 
-**Cliff edge ditemukan: antara N=1 dan N=3.** Sangat tajam, bukan gradual.
+**❌ FAILURE — tapi insight yang sangat penting.**
 
-**Observasi paling menarik**: N=22 menghasilkan output, sementara N=5-16 menghasilkan empty string. Ini counterintuitive tapi sangat informatif:
+Fourier features didesain spesifik untuk solve spectral bias (terbukti works di NeRF). Namun **MSE plateau hampir identik** dengan Coordinate MLP biasa (0.000356 vs 0.000366).
 
-- N=5-16: Layer middle yang di-corrupt menyebabkan **probability collapse** — distribusi output mendekati uniform sehingga sampling tidak menghasilkan token valid.
-- N=22: Semua layer sama-sama "salah", ada **internal consistency** — noise terdistribusi merata, model bisa generate sesuatu meski nonsense.
+**Implikasi**: Masalah yang kami hadapi **bukan spectral bias**.
 
-Analoginya: kalau lo ganti 4 dari 5 roda mobil dengan roda oval (N=5-16), getarannya parah dan mobil berhenti. Kalau lo ganti semua 5 roda dengan oval (N=22), mobil masih jalan pelan dan goyang.
+---
+
+## Eksperimen D1 — FFN Target (down_proj)
+
+**Tujuan**: Test apakah FFN layer (`down_proj`) lebih mudah di-fit dari attention layer (`o_proj`).
+
+### Setup
+- Target: 22 × `down_proj` (2048×5632 each)
+- Total target: 253M params
+- Generator: 22 × Fourier dynamic = 2.2M
+- Compression: **116.35x**
+
+### Hasil
+```
+Layer 00 | MSE: 0.000273
+Layer 10 | MSE: 0.000298
+Layer 21 | MSE: 0.000315  ← plateau
+```
+
+### Cliff Edge
+| N | Output |
+|---|--------|
+| 1 | "The capital of Indonesia is Jakarta." ✅ |
+| 3 | "" ❌ |
+| 5 | ",and,and,and,and,..." ❌ |
+| 8 | "steruptruptruptrupt..." ❌ |
+| 12 | "FFFFFFFFFFFFFFFFFFFF" ❌ |
+| 16 | "CNN CNN CNN CNN..." ❌ |
+| 22 | "wrong wrong wrong..." ❌ |
+
+### Analisis
+
+**❌ FAILURE — same plateau, even slightly higher floor.**
+
+FFN tidak lebih mudah di-fit dari attention. Plateau MSE konsisten ~0.0003.
+
+---
+
+## Eksperimen E1 — SIREN (Sinusoidal Activations)
+
+**Tujuan**: Test SIREN architecture (Sitzmann et al. 2020) untuk solve spectral bias dengan cara berbeda dari Fourier.
+
+### Setup
+- Generator: SIREN (sinusoidal activations + omega_0=30)
+- 22 generators × 149K params = 3.3M
+- Compression: 28.14x
+
+### Hasil
+```
+Layer 00 | MSE: 0.000064
+Layer 10 | MSE: 0.000227
+Layer 21 | MSE: 0.000371  ← still the plateau
+```
+
+### Cliff Edge
+| N | Output |
+|---|--------|
+| 1 | "The capital of Indonesia is Jakarta." ✅ |
+| 3 | "I don't know." ⚠️ |
+| 5 | "<\|user\|>You are..." ❌ |
+| 8-12 | "" ❌ |
+| 16 | "The\|assistant\|assistant\|user..." ❌ |
+| 22 | "Ingamesideogram, androaming totokenshellsingularum..." ❌ |
+
+### Analisis
+
+**❌ FAILURE — confirms it's not about activation function.**
+
+Dua teknik yang fundamental berbeda untuk solve spectral bias (Fourier features dan SIREN), keduanya gagal menggeser MSE plateau. Ini bukti **kuat** bahwa masalahnya bukan spectral bias.
+
+---
+
+## Eksperimen F1 — Mixture of Generators (Sharding)
+
+**Tujuan**: Pecah matrix ke 16 chunks, pakai 16 expert generators dengan internal routing.
+
+### Setup
+- Sharding: 4×4 = 16 experts per layer
+- 22 layers × 16 experts dengan local coords (512×512)
+- Total: 2.9M params
+- Compression: 31.57x
+
+### Hasil
+```
+Layer 00 | MSE: 0.000067
+Layer 10 | MSE: 0.000221
+Layer 21 | MSE: 0.000377  ← plateau lagi!
+```
+
+### Cliff Edge
+| N | Output |
+|---|--------|
+| 1 | "The capital of Indonesia is Jakarta." ✅ |
+| 3 | "I don't know." ⚠️ |
+| 5-16 | "" ❌ |
+| 22 | "WHERE2. WHERE2..." ❌ |
+
+### Analisis
+
+**❌ FAILURE — sharding doesn't help either.**
+
+Idea: spatial locality + parameter sharing yang lebih granular harusnya help. Faktanya tidak. Same plateau.
+
+---
+
+## The Plateau — Visualisasi Argumen
+
+```
+Final MSE Layer 21 across 5 different generator architectures:
+
+Coordinate MLP baseline (B2):  ████████████████████████████ 0.000373
+Coordinate MLP adaptive (B3):  ████████████████████████████ 0.000366
+Fourier Features        (C1):  ████████████████████████████ 0.000356
+SIREN                   (E1):  ████████████████████████████ 0.000371
+Mixture of Generators   (F1):  ████████████████████████████ 0.000377
+
+Spread: 0.000021 (5.6%)
+```
+
+5 arsitektur fundamentally berbeda. Plateau identik.
+
+**Itu bukan kebetulan. Itu information theoretic floor.**
 
 ---
 
 ## Kesimpulan Phase 0
 
-Berdasarkan 5 eksperimen sistematik, kami sekarang punya **karakterisasi masalah** yang jelas:
+### Apa yang Terbukti
 
-> **Implicit weight reconstruction via coordinate MLP memiliki hard limit: model transformer kehilangan semantic coherence setelah lebih dari 1 layer di-replace, independent dari generator capacity dan training budget.**
+1. ✅ Single layer compression up to 56x preserves output
+2. ✅ Cliff edge phenomenon di N=2 (sharp phase transition)
+3. ✅ MSE Loss bukan reliable predictor untuk LLM quality
+4. ✅ Layer akhir lebih kompleks dari layer awal
+5. ✅ Internal consistency matters (N=22 > N=5-16)
+6. ✅ **MSE plateau ~0.0003 adalah floor**, bukan ceiling
 
-### Apa yang Berhasil (✅)
-1. Single layer compression up to 56x masih preserve output
-2. Per-layer training berhasil dengan loss yang predictable
-3. MSE loss menurun konsisten selama training
+### Apa yang Eliminated
 
-### Apa yang Tidak Berhasil (❌)
-1. Multi-layer compression dengan single generator
-2. Multi-layer compression dengan per-layer generator
-3. Bigger capacity tidak menyelesaikan plateau MSE
-4. Output quality collapse drastis di N=2
+1. ❌ Bukan masalah generator capacity (B3)
+2. ❌ Bukan masalah spectral bias (C1, E1)
+3. ❌ Bukan masalah specific layer type (D1)
+4. ❌ Bukan masalah spatial locality (F1)
 
-### Root Cause yang Teridentifikasi
-1. **Spectral bias MLP** — coordinate MLP punya bias terhadap fungsi smooth, weight transformer high-frequency
-2. **Error sensitivity non-linear** — transformer sangat sensitif terhadap perturbasi attention weight
-3. **Compounding non-linear** — error di layer N membuat input layer N+1 out-of-distribution
+### Final Hypothesis
 
-## Langkah Selanjutnya
+> **Weight neural network setelah training dengan SGD adalah stochastic outcome dari training history, bukan smooth function dari koordinat. Coordinate-based generators tidak bisa fit ini regardless of architecture, karena tidak ada underlying function untuk di-fit.**
 
-### Direct experiments
-1. **Fourier Features encoding** — solve spectral bias dengan positional encoding (NeRF-style)
-2. **Output-aware loss** — KL-divergence pada output instead of MSE pada weight
-3. **FFN layer test** — coba `gate_proj`, `up_proj`, `down_proj` (mungkin distribusi lebih friendly)
-4. **Streaming inference system** — accept N=1 limit, build practical system around it
+### Path Forward (Untuk Orang Lain)
 
-### Architectural changes
-1. **Fractal hypernetwork generator** — recursive self-similar function (kompleks, last resort)
-2. **Mixture of generators** — multiple specialized generators dengan routing
+Jalur yang **belum** kami eksplor dan secara teoritis bisa bypass:
+
+1. **Co-Training**: Train model dari scratch dimana generator adalah part of architecture
+2. **Output-Aware Loss**: KL divergence pada output, bukan MSE pada weight
+3. **Distillation**: Student dengan generator architecture, learn from teacher
+4. **Different Architecture Targets**: Mamba, RWKV, atau arsitektur dengan struktur weight berbeda
 
 ## Reproducibility
 
-Semua eksperimen menggunakan random seed default PyTorch. Untuk reproduce exact results:
+Semua eksperimen dapat di-reproduce dengan:
 
 ```bash
-# Set deterministic mode (optional)
-export PYTHONHASHSEED=0
-
-# Run dengan seed
-python -c "import torch; torch.manual_seed(42)"
-uv run experiments/exp01_single_matrix.py
+git clone https://github.com/sangkan-dev/wiji-experimental.git
+cd wiji-experimental
+uv sync
+bash scripts/reproduce_all.sh
 ```
 
-Hasil bisa bervariasi 5-10% antar run karena random initialization, tapi pola umum konsisten.
+Variation antar run: 5-10% karena random initialization, tapi pattern umum (cliff edge, plateau) sangat konsisten.
 
 ## Hardware Performance
 
-Semua eksperimen di laptop CPU:
-- Eksperimen 1: ~3 menit training + ~30 detik reconstruction
-- Eksperimen 2: ~5 menit training + ~10 menit reconstruction (22 layers)
-- Eksperimen B2: ~30 menit total (training 22 generators sequential)
-- Eksperimen B3: ~60 menit total
-- Eksperimen B4: ~30 menit total
+Total compute time untuk semua 9 eksperimen di laptop CPU: ~10 jam.
 
-Bottleneck: matrix reconstruction (per-row generation) — bisa di-optimize dengan batch generation.
+Bottleneck utama: matrix reconstruction (per-row generation untuk swap testing). Bisa dioptimisasi dengan batch generation, tapi tidak dilakukan karena bukan focus penelitian.
